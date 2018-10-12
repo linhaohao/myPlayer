@@ -30,7 +30,7 @@ private slots:
     void setPlaylistShown();
     void setLrcShown();
     void sourceChanged(QMediaContent &source);
-    void aboutToFinish();
+    void aboutToFinish(QMediaPlayer::MediaStatus state);
     void metaStateChanged(QMediaPlayer::MediaStatus newState);
     void tableClicked(QModelIndex index);
     void clearSources();

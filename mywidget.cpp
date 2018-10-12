@@ -40,6 +40,7 @@ void MyWidget::setPaused()
         mediaObject->pause();
     else
         mediaObject->play();
+    changeActionState();
 }
 //播放上一首
 void MyWidget::skipBackward()
@@ -47,6 +48,7 @@ void MyWidget::skipBackward()
     int index = sources.indexOf(mediaObject->currentMedia());
     mediaObject->setMedia(sources.at(index-1));
     mediaObject->play();
+    changeActionState();
 }
 //播放下一首
 void MyWidget::skipForward()
@@ -54,6 +56,7 @@ void MyWidget::skipForward()
     int index = sources.indexOf(mediaObject->currentMedia());
     mediaObject->setMedia(sources.at(index+1));
     mediaObject->play();
+    changeActionState();
 }
 //打开文件
 void MyWidget::openFile()
@@ -101,13 +104,17 @@ void MyWidget::sourceChanged(QMediaContent &source)
 }
 //当前媒体源播放将要结束时，如果在列表中当前媒体源的后面还有媒体源
 //那么将它添加到播放队列中，否则停止播放
-void MyWidget::aboutToFinish()
+void MyWidget::aboutToFinish(QMediaPlayer::MediaStatus state)
 {
-    int index = sources.indexOf(mediaObject->currentMedia())+1;
-    if(sources.size()>index){
-        mediaObject->playlist()->addMedia(sources.at(index));
-    }else{
-        mediaObject->stop();
+    if(state == QMediaPlayer::EndOfMedia){
+        int index = sources.indexOf(mediaObject->currentMedia())+1;
+        if(sources.size()>index){
+            mediaObject->setMedia(sources.at(index));
+            mediaObject->play();
+            changeActionState();
+        }else{
+            mediaObject->stop();
+        }
     }
 }
 //解析媒体文件的元信息
@@ -130,36 +137,37 @@ void MyWidget::metaStateChanged(QMediaPlayer::MediaStatus newState)
     
     //获取媒体信息
     //QMap<QString,QVariant>metaData = metaInformationResolver->metaData("").toMap();
-    
-    //获取标题，如果为空，则使用文件名
-    QString title = metaInformationResolver->metaData("TITLE").toString();
-    if(title == ""){
-        QString str = metaInformationResolver->currentMedia().canonicalResource().url().toLocalFile();
-        title = QFileInfo(str).baseName();
+    if(newState == QMediaPlayer::LoadedMedia){
+        //获取标题，如果为空，则使用文件名
+        QString title = metaInformationResolver->metaData("Title").toString();
+        if(title == ""){
+            QString str = metaInformationResolver->currentMedia().canonicalResource().url().toLocalFile();
+            title = QFileInfo(str).baseName();
+        }
+        QTableWidgetItem *titleItem = new QTableWidgetItem(title);
+
+        //设置数据项不可编辑
+        titleItem->setFlags(titleItem->flags()^Qt::ItemIsEditable);
+
+        //获取艺术家信息
+        QTableWidgetItem *artistItem =
+                new QTableWidgetItem(metaInformationResolver->metaData("Author").toString());
+        artistItem->setFlags(artistItem->flags()^Qt::ItemIsEditable);
+
+        //获取总时间信息
+        qint64 totalTime = metaInformationResolver->duration();
+        QTime time(0,(totalTime/60000)%60,(totalTime/1000)%60);
+        QTableWidgetItem *timeItem = new QTableWidgetItem(time.toString("mm:ss"));
+
+        //插入到播放列表
+        int currentRow = playlist->rowCount();
+        playlist->insertRow(currentRow);
+        playlist->setItem(currentRow,0,titleItem);
+        playlist->setItem(currentRow,1,artistItem);
+        playlist->setItem(currentRow,2,timeItem);
     }
-    QTableWidgetItem *titleItem = new QTableWidgetItem(title);
-    
-    //设置数据项不可编辑
-    titleItem->setFlags(titleItem->flags()^Qt::ItemIsEditable);
-    
-    //获取艺术家信息
-    QTableWidgetItem *artistItem = 
-            new QTableWidgetItem(metaInformationResolver->metaData("ARTIST").toString());
-    artistItem->setFlags(artistItem->flags()^Qt::ItemIsEditable);
-    
-    //获取总时间信息
-    qint64 totalTime = metaInformationResolver->duration();
-    QTime time(0,(totalTime/60000)%60,(totalTime/1000)%60);
-    QTableWidgetItem *timeItem = new QTableWidgetItem(time.toString("mm:ss"));
-    
-    //插入到播放列表
-    int currentRow = playlist->rowCount();
-    playlist->insertRow(currentRow);
-    playlist->setItem(currentRow,0,titleItem);
-    playlist->setItem(currentRow,1,artistItem);
-    playlist->setItem(currentRow,2,timeItem);
-    
-    //如果添加的媒体源还没有解析完，那么继续解析下一个媒体源
+
+    //如果添加的媒体源还没有解析完，那么继续解析下一个媒体源,BUG：添加相同的媒体源的时候会一直添加
     int index = sources.indexOf(metaInformationResolver->currentMedia())+1;
     if(sources.size()>index){
         metaInformationResolver->setMedia(sources.at(index));
@@ -171,6 +179,7 @@ void MyWidget::metaStateChanged(QMediaPlayer::MediaStatus newState)
             if(mediaObject->state() != QMediaPlayer::PlayingState &&
                     mediaObject->state() != QMediaPlayer::PausedState){
                 mediaObject->setMedia(sources.at(0));
+                changeActionState();
             }else{
                 //如果正在播放歌曲，则选中播放列表的第一个曲目，并更改图标状态
                 playlist->selectRow(0);
@@ -196,6 +205,7 @@ void MyWidget::tableClicked(QModelIndex index)
 
     //设置单击的行对应的媒体源为媒体对象的当前媒体源
     mediaObject->setMedia(sources.at(index.row()));
+    changeActionState();
 
     //如果以前媒体对象处于播放状态，那么开始播放选中的曲目
     if(wasPlaying)
@@ -223,6 +233,8 @@ void MyWidget::initPlayer()
     // 关联媒体对象的tick()信号来更新播放时间的显示
     connect(mediaObject, SIGNAL(positionChanged(qint64)), this, SLOT(updateTime(qint64)));
 
+    //关联媒体对象的结束信号来切下一首哥
+    connect(mediaObject,SIGNAL(mediaStatusChanged(QMediaPlayer::MediaStatus)),this,SLOT(aboutToFinish(QMediaPlayer::MediaStatus)));
     // 创建顶部标签，用于显示一些信息
     topLabel = new QLabel(tr("<a href = \" http://www.yafeilinux.com \"> www.yafeilinux.com </a>"));
     topLabel->setTextFormat(Qt::RichText);
@@ -242,6 +254,7 @@ void MyWidget::initPlayer()
      });
      connect(seekSlider,&QSlider::sliderReleased,[=](){
          mediaObject->play();
+         changeActionState();
      });
 
     // 创建包含播放列表图标、显示时间标签和桌面歌词图标的工具栏
@@ -372,7 +385,7 @@ void MyWidget::changeActionState()
         }else{//如果媒体源列表有多行
             skipBackwardAction->setEnabled(true);
             skipForwardAction->setEnabled(true);
-            int index = playlist->currentRow();
+            int index = sources.indexOf(mediaObject->currentMedia());
             //如果播放列表当前选中的行为第一行
             if(index == 0)
                 skipBackwardAction->setEnabled(false);
