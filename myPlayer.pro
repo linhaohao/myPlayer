@@ -26,11 +26,13 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += \
         main.cpp \
         mywidget.cpp \
-    myplaylist.cpp
+    myplaylist.cpp \
+    mylrc.cpp
 
 HEADERS += \
         mywidget.h \
-    myplaylist.h
+    myplaylist.h \
+    mylrc.h
 
 FORMS += \
         mywidget.ui

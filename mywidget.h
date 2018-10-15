@@ -8,6 +8,7 @@
 #include <QModelIndex>
 class QLabel;
 class MyPlaylist;
+class MyLrc;
 
 namespace Ui {
 class MyWidget;
@@ -49,6 +50,9 @@ private:
     QMediaPlayer *metaInformationResolver;
     QList<QMediaContent>sources;
     void changeActionState();
+    MyLrc *lrc;
+    QMap<qint64,QString>lrcMap;
+    void resolveLrc(const QString &sourceFileName);
 };
 
 #endif // MYWIDGET_H

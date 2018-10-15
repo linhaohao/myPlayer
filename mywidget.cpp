@@ -1,5 +1,7 @@
 ﻿#include "mywidget.h"
 #include "ui_mywidget.h"
+#include "mylrc.h"
+#include <QTextCodec>
 #include <QLabel>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -32,6 +34,41 @@ void MyWidget::updateTime(qint64 time)
     QTime currentTime(0,(time/60000)%60,(time/1000)%60);
     QString str = currentTime.toString("mm:ss")+"/"+totalTime.toString("mm:ss");
     timeLabel->setText(str);
+
+    //获取当前时间对应的歌词
+    if(!lrcMap.isEmpty()){
+        //获取当前时间在歌词中的前后两个时间点
+        qint64 previous = 0;
+        qint64 later = 0;
+        foreach(qint64 value,lrcMap.keys()){
+            if(time>=value){
+                previous = value;
+            }else{
+                later = value;
+                break;
+            }
+        }
+        //到达最后一行，将later设置为歌曲总时间的值
+        if(later == 0)
+            later = totalTimeValue;
+
+        //获取当前时间所对应的歌词内容
+        QString currentLrc = lrcMap.value(previous);
+
+        //没有内容时
+        if(currentLrc.length()<2)
+            currentLrc = tr("MyPlayer音乐播放器");
+
+        //如果时新的一行歌词，那么重新开始显示歌词遮罩
+        if(currentLrc != lrc->text()){
+            lrc->setText(currentLrc);
+            topLabel->setText(currentLrc);
+            qint64 intervalTime = later - previous;
+            lrc->startLrcMask(intervalTime);
+        }
+    }else{//如果没有歌词文件，则在顶部标签中显示歌曲标题
+        topLabel->setText(QFileInfo(mediaObject->currentMedia().canonicalUrl().toLocalFile()).baseName());
+    }
 }
 //播放或暂停
 void MyWidget::setPaused()
@@ -45,6 +82,7 @@ void MyWidget::setPaused()
 //播放上一首
 void MyWidget::skipBackward()
 {
+    lrc->stopLrcMask();
     int index = sources.indexOf(mediaObject->currentMedia());
     mediaObject->setMedia(sources.at(index-1));
     mediaObject->play();
@@ -53,6 +91,7 @@ void MyWidget::skipBackward()
 //播放下一首
 void MyWidget::skipForward()
 {
+    lrc->stopLrcMask();
     int index = sources.indexOf(mediaObject->currentMedia());
     mediaObject->setMedia(sources.at(index+1));
     mediaObject->play();
@@ -93,7 +132,10 @@ void MyWidget::setPlaylistShown()
 //显示或隐藏桌面歌词
 void MyWidget::setLrcShown()
 {
-
+    if(lrc->isHidden())
+        lrc->show();
+    else
+        lrc->hide();
 }
 //当媒体源改变时，在播放列表中选中相应的行并更新图标的状态
 void MyWidget::sourceChanged(QMediaContent &source)
@@ -232,6 +274,21 @@ void MyWidget::initPlayer()
 
     // 关联媒体对象的tick()信号来更新播放时间的显示
     connect(mediaObject, SIGNAL(positionChanged(qint64)), this, SLOT(updateTime(qint64)));
+    connect(mediaObject,&QMediaPlayer::stateChanged,[=](QMediaPlayer::State state){
+        if(state == QMediaPlayer::PlayingState)
+            resolveLrc(mediaObject->currentMedia().canonicalUrl().toLocalFile());
+        else if(state == QMediaPlayer::StoppedState){
+            lrc->stopLrcMask();
+            lrc->setText(tr("MyPlayer"));
+        }
+        else if(state == QMediaPlayer::PausedState){
+            //如果该歌曲有歌词文件
+            if(!lrcMap.isEmpty()){
+                lrc->stopLrcMask();
+                lrc->setText(topLabel->text());
+            }
+        }
+    });
 
     //关联媒体对象的结束信号来切下一首哥
     connect(mediaObject,SIGNAL(mediaStatusChanged(QMediaPlayer::MediaStatus)),this,SLOT(aboutToFinish(QMediaPlayer::MediaStatus)));
@@ -360,6 +417,9 @@ void MyWidget::initPlayer()
     skipBackwardAction->setEnabled(false);
     skipForwardAction->setEnabled(false);
     topLabel->setFocus();
+
+    //创建歌词部件
+    lrc = new MyLrc(this);
 }
 //根据媒体源列表内容和当前媒体源的位置来改变主界面图标的状态
 void MyWidget::changeActionState()
@@ -393,5 +453,72 @@ void MyWidget::changeActionState()
             if(index + 1 == sources.count())
                 skipForwardAction->setEnabled(false);
         }
+    }
+}
+//解析LRC歌词
+void MyWidget::resolveLrc(const QString &sourceFileName)
+{
+    //先清空以前的内容
+    lrcMap.clear();
+
+    //获取LRC歌词的文件名
+    if(sourceFileName.isEmpty())
+        return;
+    QString fileName = sourceFileName;
+    QString lrcFileName = fileName.remove(fileName.right(3))+"lrc";
+
+    //打开歌词文件
+    QFile file(lrcFileName);
+    if(!file.open(QIODevice::ReadOnly)){
+        lrc->setText(QFileInfo(mediaObject->currentMedia().canonicalUrl().toLocalFile()).baseName()
+                     + tr("---未找到歌词文件！"));
+        return;
+    }
+    //设置字符串编码
+    QTextCodec::setCodecForLocale(QTextCodec::codecForLocale());
+    //获取全部歌词信息
+    QString allText = QString(file.readAll());
+
+    //关闭歌词文件
+    file.close();
+
+    //将歌词按行分解为歌词列表
+    QStringList lines = allText.split("\n");
+
+    //使用正则表达式将时间标签和歌词内容分离
+    QRegExp rx("\\[\\d{2}:\\d{2}\\.\\d{2}\\]");
+    foreach(QString oneLine,lines){
+        //先在当前行的歌词的备份中将时间内容清除，这样就获得了歌词文本
+        QString  temp = oneLine;
+        temp.replace(rx,"");
+        //然后依次获取当前行中所有时间标签，并分别与歌词文本存入QMap中
+        int pos = rx.indexIn(oneLine,0);
+        while(pos != -1){
+            QString cap = rx.cap(0);
+
+            //将时间标签转换为时间数值，以毫秒为单位
+            QRegExp regexp;
+            regexp.setPattern("\\d{2}(?=:)");
+            regexp.indexIn(cap);
+            int minute = regexp.cap(0).toInt();
+            regexp.setPattern("\\d{2}(?=\\.)");
+            regexp.indexIn(cap);
+            int second = regexp.cap(0).toInt();
+            regexp.setPattern("\\d{2}(?=\\]");
+            regexp.indexIn(cap);
+            int millisecond = regexp.cap(0).toInt();
+            qint64 totalTime = minute * 60000 + second * 1000 + millisecond * 10;
+
+            //插入到lrcMap中
+            lrcMap.insert(totalTime,temp);
+            pos += rx.matchedLength();
+            pos = rx.indexIn(oneLine,pos);
+        }
+    }
+    //如果lrcMap为空
+    if(lrcMap.isEmpty()){
+        lrc->setText(QFileInfo(mediaObject->currentMedia().canonicalUrl().toLocalFile()).baseName()
+                     + tr("---歌词文件为找到"));
+        return;
     }
 }
